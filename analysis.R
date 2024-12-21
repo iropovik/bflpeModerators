@@ -410,7 +410,7 @@ for (domain in domains) {
   for (centering in centerings) {
     # Create a unique key for storing results
     key <- paste(domain, centering, sep = "_")
-    message(sprintf("Running analysis for %s domain with %s centering", domain, centering))
+    #message(sprintf("Running analysis for %s domain with %s centering", domain, centering))
     
     ## 6.1 Data Centering and Preparation
     
@@ -433,13 +433,14 @@ for (domain in domains) {
     if (domain == "OVERALL" && !"IRT_ACH" %in% names(dat)) {
       principalResult <- principal(dat[, c("IRT_CJ", "IRT_M")], nfactors = 1, rotate = "none")
       dat$IRT_ACH <- principalResult$scores[, 1]
-      message("Computed IRT_ACH using principal component analysis.")
     }
     
     ### 6.1.5 Filter Data for Complete Cases
-    varsNeeded <- c(indVars, achVar, "IDclass")
-    completeCases <- complete.cases(dat[, varsNeeded])
-    datFiltered <- dat[completeCases, ]
+    datFiltered <- dat %>%
+      ungroup() %>%
+      mutate(missingProp = rowMeans(is.na(.))) %>%
+      filter(missingProp < 0.8) %>%
+      select(-missingProp)
     
     ### 6.1.6 Filter for Minimum Class Size (>=15)
     datFiltered <- datFiltered %>%
@@ -450,7 +451,7 @@ for (domain in domains) {
     
     ### 6.1.7 Fit CFA (Measurement Model)
     measModel <- paste0("SC", domain, " =~ ", paste(indVars, collapse = " + "))
-    cfaFit <- cfa(measModel, data = datFiltered, ordered = indVars, estimator = "WLSMV")
+    cfaFit <- cfa(measModel, data = datFiltered, missing = "fiml", estimator = "MLR",  sampling.weights = "STUWGT")
     cfaResults[[key]] <- cfaFit  # Store CFA Fit
     
     ### 6.1.8 Get Predicted Factor Scores
@@ -626,11 +627,11 @@ for (domain in domains) {
     
     ### 6.3.2 Fit SEM Model using sem()
     # Using MLR estimator and FIML for robust fit indices
-    semFitSem <- sem(modelSyntax, data = datFiltered, missing = "fiml", estimator = "MLR")
+    semFitSem <- sem(modelSyntax, data = datFiltered, missing = "fiml", estimator = "MLR", sampling.weights = "STUWGT")
     
     ### 6.3.3 Fit SEM Model using sam()
     # Using ML estimator and sam.method = "local"
-    semFitSam <- sam(modelSyntax, data = datFiltered, missing = "fiml", sam.method = "local", struc.args = list(estimator = "ML", cluster = "IDclass"), mm.args = list(estimator = "MLR"))
+    semFitSam <- sam(modelSyntax, data = datFiltered, missing = "fiml", sam.method = "local", struc.args = list(estimator = "ML", cluster = "IDclass", sampling.weights = "STUWGT"), mm.args = list(estimator = "MLR"))
     
     ### 6.3.4 Store SEM Fit Results
     semResults[[key]] <- list(
@@ -790,9 +791,6 @@ semSummary %>%
 #'## BFLPE SEM Diagrams
 ## 9. Plot SEM Diagrams
 
-# Note: `semPaths` is compatible with `lavaan` objects returned by `sem()`.
-# Therefore, we will use `semFitSem` for plotting.
-
 for (domain in domains) {
   for (centering in centerings) {
     key <- paste(domain, centering, sep = "_")
@@ -886,8 +884,11 @@ createCenteredData <- function(data, domain = c("VERB", "MATH", "OVERALL"), cent
   vars_needed <- c(indVars, achVar, "IDclass")
   
   # Filter for complete cases on necessary variables
-  complete_cases <- complete.cases(data[, vars_needed])
-  filtered_data <- data[complete_cases, ]
+  filtered_data <- data %>%
+    ungroup() %>%
+    mutate(missingProp = rowMeans(is.na(.))) %>%
+    filter(missingProp < 0.8) %>%
+    select(-missingProp)
   
   # Filter for minimum class size
   filtered_data <- filtered_data %>%
@@ -898,7 +899,7 @@ createCenteredData <- function(data, domain = c("VERB", "MATH", "OVERALL"), cent
   
   # First stage of SAM: Fit CFA (measurement model)
   measModel <- paste0("SC", domain, " =~ ", paste(indVars, collapse = " + "))
-  fit.meas <- cfa(measModel, data = filtered_data, ordered = indVars, estimator = "WLSMV")
+  fit.meas <- cfa(measModel, data = filtered_data, missing = "fiml", estimator = "MLR", sampling.weights = "STUWGT")
   
   # Get predicted factor scores
   filtered_data$score <- lavPredict(fit.meas, transform = TRUE)
@@ -1017,7 +1018,8 @@ fitCFA <- function(data, domain = c("VERB", "MATH", "OVERALL")) {
   fit <- cfa(models[[domain]], 
              data = data,
              ordered = ordered_vars[[domain]],
-             estimator = "WLSMV")
+             estimator = "WLSMV",
+             sampling.weights = "STUWGT")
   #fit <- lavaan.survey(lavaan.fit = fit, survey.design = design)
   return(fit)
 }
@@ -1115,7 +1117,8 @@ fitModeratedSEM <- function(data, moderator, domain = c("VERB", "MATH", "OVERALL
              data = data,
              missing = "fiml",
              estimator = "MLR",
-             cluster = "IDclass")
+             cluster = "IDclass",
+             sampling.weights = "STUWGT")
   #fit <- lavaan.survey(fit, survey.design = design)
   return(fit)
 }
@@ -1325,15 +1328,14 @@ moderators <- c("avgGrade", "varGrade", "SES", "D1", "gender.prop", "D6",
 
 domains <- c("VERB", "MATH", "OVERALL")
 centerings <- c("group", "grand")
-
 moderation_results <- list()
 
 #+ include = FALSE
 for(domain in domains) {
   for(centering in centerings) {
     for(moderator in moderators) {
-      message(sprintf("Running analysis for %s domain with %s centering and %s moderator", 
-                      domain, centering, moderator))
+      #message(sprintf("Running analysis for %s domain with %s centering and %s moderator", 
+      #                domain, centering, moderator))
       key <- paste(domain, centering, moderator)
       moderation_results[[key]] <- runModerationAnalysis(dat, moderator, domain, centering)
     }
@@ -1377,7 +1379,8 @@ sem_moderation_plot_data <- semSummary$raw %>%
 sem_moderation_plot_data <- semSummary$raw %>%
   # Keep only contextual effects interactions and exclude gender.prop
   filter(Effect == "Interaction", 
-         Moderator != "NA (gender.prop)") %>%
+         Moderator != "NA (gender.prop)",
+         Moderator != "Track Proportion (vg.prop)") %>%
   # Create significance indicator
   mutate(
     significant = p_value < .05,
@@ -2152,433 +2155,4 @@ kable(moderation_summary,
 # 
 # #'#### Mean value of the design effect (Muthén & Sattora, 1995)
 # 1 + (nrow(data)/length(unique(data$cluster)) - 1)*((sum(iccTable$ICC)/nrow(iccTable))/5)
-
-##################################
-##################################
-#################################
-#'# BFLPE
-
-# Helper function for group/grand mean centering
-createCenteredData <- function(data, domain = c("VERB", "MATH", "OVERALL"), centeringType = c("group", "grand")) {
-  centeringType <- match.arg(centeringType)
-  domain <- match.arg(domain)
-  
-  # Select appropriate achievement variable based on domain
-  achVar <- switch(domain,
-                   VERB = "IRT_CJ",
-                   MATH = "IRT_M",
-                   OVERALL = "IRT_ACH"
-  )
-  
-  # Create class-level variable name
-  classVar <- paste0(achVar, "_class")
-  
-  # Get relevant variables for the domain
-  indVars <- switch(domain,
-                    VERB = c("B2_1", "B2_4", "B2_7", "B2_10"),
-                    MATH = c("B2_2", "B2_5", "B2_9", "B2_11"),
-                    OVERALL = c("B2_3", "B2_6", "B2_8")
-  )
-  
-  # Create OVERALL achievement if needed
-  if(domain == "OVERALL" && !"IRT_ACH" %in% names(data)) {
-    data$IRT_ACH <- principal(data[, c("IRT_CJ", "IRT_M")], 
-                              nfactors = 1, 
-                              rotate = "none")$scores[, 1]
-  }
-  
-  # Get all variables needed for analysis
-  vars_needed <- c(indVars, achVar, "IDclass")
-  
-  # Filter for complete cases on necessary variables
-  complete_cases <- complete.cases(data[, vars_needed])
-  filtered_data <- data[complete_cases, ]
-  
-  # Filter for minimum class size
-  filtered_data <- filtered_data %>%
-    group_by(IDclass) %>%
-    mutate(classSize = n()) %>%
-    filter(classSize >= 15) %>%
-    ungroup()
-  
-  # First stage of SAM: Fit CFA (measurement model)
-  measModel <- paste0("SC", domain, " =~ ", paste(indVars, collapse = " + "))
-  fit.meas <- cfa(measModel, data = filtered_data, ordered = indVars, estimator = "WLSMV")
-  
-  # Get predicted factor scores
-  filtered_data$score <- lavPredict(fit.meas, transform = TRUE)
-  
-  # Now do the centering on filtered data
-  if(centeringType == "group") {
-    filtered_data <- filtered_data %>%
-      group_by(IDclass) %>%
-      mutate(
-        # Create class mean
-        !!classVar := mean(get(achVar), na.rm = TRUE),
-        # Create group-mean centered individual achievement
-        !!achVar := get(achVar) - get(classVar)
-      ) %>%
-      ungroup()
-  } else {
-    # Grand mean centering
-    grand_mean <- mean(filtered_data[[achVar]], na.rm = TRUE)
-    filtered_data <- filtered_data %>%
-      group_by(IDclass) %>%
-      mutate(
-        # Create class mean
-        !!classVar := mean(get(achVar), na.rm = TRUE),
-        # Create grand-mean centered individual achievement
-        !!achVar := get(achVar) - grand_mean
-      ) %>%
-      ungroup()
-  }
-  
-  return(filtered_data)
-}
-
-# Function to compute standardized mixed model coefficients
-standardize_mixed_model <- function(model, data) {
-  # Get fixed effects
-  fixed_effects <- fixef(model)
-  
-  # Get variance components
-  vc <- VarCorr(model)
-  random_var <- as.numeric(vc$IDclass[1])
-  residual_var <- sigma(model)^2
-  
-  # Get predictor standard deviations
-  pred_sds <- sapply(names(fixed_effects)[-1], function(var) {
-    sd(data[[var]], na.rm = TRUE)
-  })
-  
-  # Get outcome standard deviation (total)
-  outcome_sd <- sd(data$score, na.rm = TRUE)
-  
-  # Compute standardized coefficients
-  std_coef <- fixed_effects[-1] * pred_sds / outcome_sd
-  
-  # Compute standard errors for standardized coefficients
-  vcov_matrix <- vcov(model)[-1, -1]
-  std_se <- sqrt(diag(vcov_matrix)) * abs(pred_sds / outcome_sd)
-  
-  # R-squared calculations
-  var_explained_l1 <- var(predict(model, re.form = NA), na.rm = TRUE)
-  r2_within <- var_explained_l1 / (var_explained_l1 + residual_var)
-  
-  var_explained_l2 <- var(ranef(model)$IDclass[[1]], na.rm = TRUE)
-  r2_between <- var_explained_l2 / (var_explained_l2 + random_var)
-  
-  return(list(
-    std_coef = std_coef,
-    std_se = std_se,
-    r2_within = r2_within,
-    r2_between = r2_between
-  ))
-}
-
-# Function to fit mixed model with standardization
-fitMixed <- function(data, domain = c("VERB", "MATH", "OVERALL")) {
-  domain <- match.arg(domain)
-  
-  # Select appropriate achievement variables based on domain
-  achVar <- switch(domain,
-                   VERB = "IRT_CJ",
-                   MATH = "IRT_M",
-                   OVERALL = "IRT_ACH"
-  )
-  
-  # Get class-level variable name
-  classVar <- paste0(achVar, "_class")
-  
-  # Fit model using the 'score' variable instead of latent variable names
-  formula <- as.formula(paste("score ~", 
-                              achVar, "+", 
-                              classVar, "+", 
-                              "(1|IDclass)"))
-  
-  model <- lmer(formula, data = data)
-  
-  # Calculate ICC
-  icc <- performance::icc(model)$ICC_adjusted
-  
-  # Get standardized coefficients
-  std_results <- standardize_mixed_model(model, data)
-  
-  return(list(
-    model = model,
-    icc = icc,
-    std_coef = std_results$std_coef,
-    std_se = std_results$std_se,
-    r2_within = std_results$r2_within,
-    r2_between = std_results$r2_between
-  ))
-}
-
-# Function to fit single-level SEM with MLR and FIML
-fitSEM <- function(data, domain = c("VERB", "MATH", "OVERALL")) {
-  domain <- match.arg(domain)
-  
-  # Define models with domain-specific variables
-  models <- list(
-    VERB = '
-      # Measurement model
-      SCVERB =~ B2_1 + B2_4 + B2_7 + B2_10
-      
-      # Structural model
-      SCVERB ~ b1*IRT_CJ + b2*IRT_CJ_class
-      
-      # Class-level achievement
-      IRT_CJ_class ~ IRT_CJ
-    ',
-    
-    MATH = '
-      # Measurement model
-      SCMATH =~ B2_2 + B2_5 + B2_9 + B2_11
-      
-      # Structural model
-      SCMATH ~ b1*IRT_M + b2*IRT_M_class
-      
-      # Class-level achievement
-      IRT_M_class ~ IRT_M
-    ',
-    
-    OVERALL = '
-      # Measurement model
-      SCACAD =~ B2_3 + B2_6 + B2_8
-      
-      # Structural model
-      SCACAD ~ b1*IRT_ACH + b2*IRT_ACH_class
-      
-      # Class-level achievement
-      IRT_ACH_class ~ IRT_ACH
-    '
-  )
-  
-  # Fit the model
-  fit <- sem(models[[domain]], 
-             data = data,
-             missing = "fiml",
-             #cluster = "IDclass",
-             estimator = "MLR"
-  )
-  #fit <- lavaan.survey(lavaan.fit = fit, survey.design = design, estimator = "ML")
-  return(fit)
-}
-
-# Main analysis function
-runAnalysis <- function(data, domain, centeringType) {
-  # 1. Prepare data with appropriate centering and filtering
-  centeredData <- createCenteredData(data, domain, centeringType)
-  
-  # 2. Fit CFA and get predicted scores
-  cfaFit <- fitCFA(centeredData, domain)
-  centeredData$score <- predict(cfaFit)
-  
-  # 3. Fit mixed model
-  mixedResults <- fitMixed(centeredData, domain)
-  
-  # 4. Fit SEM
-  semResults <- fitSEM(centeredData, domain)
-  
-  # Extract mixed model fixed effects and SEs
-  mixed_coef <- fixef(mixedResults$model)
-  mixed_se <- sqrt(diag(vcov(mixedResults$model)))
-  
-  # Extract SEM results
-  sem_params <- parameterEstimates(semResults, standardized = TRUE)
-  sem_struct <- sem_params[sem_params$op == "~", ]
-  
-  # Get all necessary fit measures
-  fit_measures <- fitMeasures(semResults, c("chisq.scaled", "df.scaled", "pvalue.scaled", 
-                                            "cfi", "rmsea", "srmr"))
-  
-  return(list(
-    domain = domain,
-    centering = centeringType,
-    mixed = list(
-      coef = mixed_coef,
-      se = mixed_se,
-      icc = mixedResults$icc,
-      std_coef = mixedResults$std_coef,
-      std_se = mixedResults$std_se,
-      r2_within = mixedResults$r2_within,
-      r2_between = mixedResults$r2_between
-    ),
-    sem = list(
-      fit_object = semResults,  # Store the actual lavaan object
-      coef = sem_params,
-      fit = fit_measures
-    ),
-    n_classes = length(unique(centeredData$IDclass)),
-    avg_class_size = mean(table(centeredData$IDclass)),
-    n_students = nrow(centeredData)
-  ))
-}
-
-# Create summary tables for LME models
-createLMESummaryTable <- function(results) {
-  # LME effects table
-  lme_effects <- map_dfr(results, function(r) {
-    tibble(
-      Domain = r$domain,
-      Centering = r$centering,
-      Effect = c("Individual", "Contextual"),
-      Estimate = r$mixed$coef[2:3],  # Skip intercept
-      SE = r$mixed$se[2:3],
-      p_value = 2 * (1 - pnorm(abs(r$mixed$coef[2:3] / r$mixed$se[2:3]))),
-      Std_Estimate = r$mixed$std_coef,
-      Std_SE = r$mixed$std_se,
-      ICC = rep(r$mixed$icc, 2),
-      R2_within = rep(r$mixed$r2_within, 2),
-      R2_between = rep(r$mixed$r2_between, 2)
-    )
-  })
-  
-  # Format LME table
-  lme_formatted <- lme_effects %>%
-    mutate(
-      p_value = ifelse(p_value < .001, "< .001", sprintf("%.3f", p_value)),
-      Estimate = sprintf("%.3f", Estimate),
-      SE = sprintf("%.3f", SE),
-      Std_Estimate = sprintf("%.3f", Std_Estimate),
-      Std_SE = sprintf("%.3f", Std_SE),
-      ICC = sprintf("%.3f", ICC),
-      R2_within = sprintf("%.3f", R2_within),
-      R2_between = sprintf("%.3f", R2_between)
-    ) %>%
-    arrange(Domain, Centering)
-  
-  return(list(
-    table = lme_formatted,
-    raw = lme_effects
-  ))
-}
-
-# Create summary tables for SEM models
-createSEMSummaryTable <- function(results) {
-  # SEM effects table
-  sem_effects <- map_dfr(results, function(r) {
-    # Get only the b1 and b2 parameters from SEM
-    sem_params <- r$sem$coef[r$sem$coef$op == "~", ]
-    sem_params <- sem_params[1:2, ]  # First two regression paths
-    
-    # Get fit measures
-    fit_measures <- r$sem$fit
-    
-    tibble(
-      Domain = r$domain,
-      Centering = r$centering,
-      Effect = c("Individual", "Contextual"),
-      Estimate = sem_params$est,
-      SE = sem_params$se,
-      p_value = sem_params$pvalue,
-      Std_Estimate = sem_params$std.all,
-      Std_SE = sem_params$se,
-      ChiSq = rep(fit_measures["chisq.scaled"], 2),
-      df = rep(fit_measures["df.scaled"], 2),
-      ChiSq_p = rep(fit_measures["pvalue.scaled"], 2),
-      CFI = rep(fit_measures["cfi"], 2),
-      RMSEA = rep(fit_measures["rmsea"], 2),
-      SRMR = rep(fit_measures["srmr"], 2)
-    )
-  })
-  
-  # Format SEM table
-  sem_formatted <- sem_effects %>%
-    mutate(
-      p_value = ifelse(p_value < .001, "< .001", sprintf("%.3f", p_value)),
-      Estimate = sprintf("%.3f", Estimate),
-      SE = sprintf("%.3f", SE),
-      Std_Estimate = sprintf("%.3f", Std_Estimate),
-      Std_SE = sprintf("%.3f", Std_SE),
-      ChiSq = sprintf("%.2f", ChiSq),
-      ChiSq_p = ifelse(ChiSq_p < .001, "< .001", sprintf("%.3f", ChiSq_p)),
-      CFI = sprintf("%.3f", CFI),
-      RMSEA = sprintf("%.3f", RMSEA),
-      SRMR = sprintf("%.3f", SRMR)
-    ) %>%
-    arrange(Domain, Centering)
-  
-  return(list(
-    table = sem_formatted,
-    raw = sem_effects
-  ))
-}
-
-# Function to create SEM diagrams for each model
-plotSEMDiagrams <- function(results) {
-  for(domain in c("VERB", "MATH", "OVERALL")) {
-    for(centering in c("group", "grand")) {
-      # Get the model
-      model_key <- paste(domain, centering)
-      fit <- results[[model_key]]$sem$fit_object
-      
-      # Create plot
-      semPaths(fit, 
-               whatLabels = "std", 
-               layout = "tree2", 
-               rotation = 3, 
-               residuals = FALSE, 
-               edge.label.cex = 1,
-               nCharNodes = 0,
-               sizeMan = 8, 
-               sizeLat = 8)
-      
-      # Add title after plot
-      title(main = paste("BFLPE Model -", domain, "(", centering, "centering)"))
-    }
-  }
-}
-
-# Re-run analyses for all combinations
-domains <- c("VERB", "MATH", "OVERALL")
-centerings <- c("group", "grand")
-
-all_results <- list()
-for(domain in domains) {
-  for(centering in centerings) {
-    message(sprintf("Running analysis for %s domain with %s centering", domain, centering))
-    all_results[[paste(domain, centering)]] <- runAnalysis(dat, domain, centering)
-  }
-}
-
-# Generate tables
-lmeSummary <- createLMESummaryTable(all_results)
-semSummary <- createSEMSummaryTable(all_results)
-
-# Print tables
-#'## BFLPE Linear Mixed Effects Model Results
-lmeSummary$table %>% kable(format = "html", digits = 3, 
-                           caption = "Linear Mixed Effects Model Results") %>%
-  kable_styling(bootstrap_options = c("striped", "hover")) %>%
-  add_header_above(c(" " = 3, "Unstandardized" = 3, "Standardized" = 2, "Model Fit" = 3))
-
-#'## BFLPE Structural Equation Model Results
-semSummary$table %>% kable(format = "html", digits = 3,
-                           caption = "Structural Equation Model Results") %>%
-  kable_styling(bootstrap_options = c("striped", "hover")) %>%
-  add_header_above(c(" " = 3, "Unstandardized" = 3, "Standardized" = 2, "Model Fit" = 6))
-
-# Raw data
-lme_raw <- lmeSummary$raw
-sem_raw <- semSummary$raw
-
-# Plot diagrams
-plotSEMDiagrams(all_results)
-
-# Additional summary of sample sizes
-sample_sizes <- map_dfr(all_results[grep("group$", names(all_results))], function(r) {
-  tibble(
-    Domain = r$domain,
-    N_Students = r$n_students,
-    N_Classes = r$n_classes,
-    Avg_Class_Size = r$avg_class_size
-  )
-})
-
-#'### Sample Size Summary
-sample_sizes %>%
-  kable(format = "html", digits = 1) %>%
-  kable_styling(bootstrap_options = c("striped", "hover"))
-
 
